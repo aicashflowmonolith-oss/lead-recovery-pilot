@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=70"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "life-os"
+version = "0.2.0"
+description = "Local-first personal operating system"
+requires-python = ">=3.12"
+
+[project.optional-dependencies]
+ai-gateway = ["litellm>=1.60,<2"]
+
+[project.scripts]
+life-os = "life_os.cli:main"
+
+[tool.setuptools]
+packages = ["life_os"]
