@@ -1,0 +1,14 @@
+{
+  "source_repo": "aicashflowmonolith-oss/life-os",
+  "source_sha": "bfb2f58a7d083ea3deb1288a743b6d8f25aff573",
+  "mirrored_file_count": 137,
+  "verification_scope": [
+    "life_os/**",
+    "scripts/**",
+    "tests/test_windows_control_agent.py",
+    "tests/test_runtime_babysitter.py",
+    "tests/test_operational_invariants.py",
+    "pyproject.toml"
+  ],
+  "purpose": "alternate exact-source verifier while GitHub Actions runners are unavailable"
+}
