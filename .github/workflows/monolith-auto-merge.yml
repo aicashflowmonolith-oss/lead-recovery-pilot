@@ -1,0 +1,91 @@
+name: MONOLITH Verified Auto Merge
+
+on:
+  workflow_run:
+    workflows: ["LIFE OS CI"]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: monolith-auto-merge-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Merge exact verified MONOLITH PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          CI_BASE_SHA: ${{ github.event.workflow_run.pull_requests[0].base.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          case "$HEAD_BRANCH" in
+            monolith/auto/*) ;;
+            *) echo "Not a MONOLITH-owned auto branch; no merge."; exit 0 ;;
+          esac
+
+          if [[ ! "$CI_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "CI run has no exact pull-request base SHA; refusing unbound merge evidence."
+            exit 0
+          fi
+
+          prs="$(gh api --method GET "repos/$REPO/pulls" \
+            -f state=open -f base=main -f head="$OWNER:$HEAD_BRANCH" -f per_page=10)"
+          number="$(jq -r --arg sha "$HEAD_SHA" '[.[] | select(.head.sha == $sha and .base.ref == "main" and .draft == false)][0].number // empty' <<<"$prs")"
+          if [[ -z "$number" ]]; then
+            echo "No exact open non-draft PR for verified head; no merge."
+            exit 0
+          fi
+
+          pr="$(gh api "repos/$REPO/pulls/$number")"
+          actual_sha="$(jq -r '.head.sha' <<<"$pr")"
+          base="$(jq -r '.base.ref' <<<"$pr")"
+          current_pr_base_sha="$(jq -r '.base.sha' <<<"$pr")"
+          state="$(jq -r '.state' <<<"$pr")"
+          draft="$(jq -r '.draft' <<<"$pr")"
+          current_main_sha="$(gh api "repos/$REPO/git/ref/heads/main" --jq '.object.sha')"
+          if [[ "$actual_sha" != "$HEAD_SHA" || "$base" != "main" || "$state" != "open" || "$draft" != "false" ]]; then
+            echo "PR changed after CI; refusing stale merge."
+            exit 1
+          fi
+          if [[ "$current_main_sha" != "$CI_BASE_SHA" || "$current_pr_base_sha" != "$CI_BASE_SHA" ]]; then
+            echo "main moved after this CI evidence was produced; refresh/retest before merge."
+            echo "CI_BASE_SHA=$CI_BASE_SHA"
+            echo "CURRENT_MAIN_SHA=$current_main_sha"
+            echo "CURRENT_PR_BASE_SHA=$current_pr_base_sha"
+            exit 0
+          fi
+
+          protected="$(gh api --paginate "repos/$REPO/pulls/$number/files?per_page=100" --jq '.[].filename' | \
+            grep -E '^(\.github/workflows/(ci\.yml|monolith-auto-merge\.yml))$' || true)"
+          if [[ -n "$protected" ]]; then
+            echo "Merge/CI policy changes require an explicit owner merge:"
+            echo "$protected"
+            exit 0
+          fi
+
+          body="$(jq -r '.body // ""' <<<"$pr")"
+          if ! grep -q 'Automated verified engineering run' <<<"$body"; then
+            echo "PR lacks MONOLITH verified-engineering provenance; refusing auto-merge."
+            exit 0
+          fi
+
+          result="$(gh api --method PUT "repos/$REPO/pulls/$number/merge" \
+            -f merge_method=squash -f sha="$HEAD_SHA")"
+          if [[ "$(jq -r '.merged' <<<"$result")" != "true" ]]; then
+            echo "GitHub refused exact-head merge."
+            jq -r '.message // "merge refused"' <<<"$result"
+            exit 1
+          fi
+          echo "Merged PR #$number at verified head $HEAD_SHA against unchanged base $CI_BASE_SHA."
