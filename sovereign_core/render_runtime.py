@@ -5,6 +5,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import monolith as core
+import autonomy
 
 DB_PATH = os.environ.get("MONOLITH_DB", "/tmp/sovereign-core.db")
 HOST = "0.0.0.0"
@@ -30,10 +31,18 @@ def authorized_header(header: str | None, token: str) -> bool:
 def worker_loop() -> None:
     core.init_db(DB_PATH)
     conn = core.connect(DB_PATH)
+    autonomy.init_autonomy(conn)
     try:
         while not STOP.is_set():
+            auto = autonomy.tick(conn)
             worked = core.work_once(conn)
-            if worked is None:
+            if (
+                worked is None
+                and auto["schedules_submitted"] == 0
+                and auto["goals"]["submitted"] == 0
+                and auto["goals"]["completed"] == 0
+                and auto["goals"]["blocked"] == 0
+            ):
                 STOP.wait(1.0)
     finally:
         conn.close()
@@ -81,6 +90,7 @@ class ControlHandler(BaseHTTPRequestHandler):
                         "schema_version": status["schema_version"],
                         "adapters": len(status["adapters"]),
                         "tasks": status["tasks"],
+                        "autonomy": autonomy.status(conn),
                     },
                 )
             finally:
@@ -94,6 +104,10 @@ class ControlHandler(BaseHTTPRequestHandler):
         try:
             if self.path == "/status":
                 self.send_json(200, core.get_status(conn))
+            elif self.path == "/goals":
+                self.send_json(200, {"goals": autonomy.list_goals(conn, 100)})
+            elif self.path == "/schedules":
+                self.send_json(200, {"schedules": autonomy.list_schedules(conn, 100)})
             elif self.path.startswith("/tasks"):
                 self.send_json(200, {"tasks": core.list_tasks(conn, 100)})
             else:
@@ -112,6 +126,34 @@ class ControlHandler(BaseHTTPRequestHandler):
             body = self.read_json()
             if self.path == "/command":
                 self.send_json(200, core.command(conn, str(body.get("text", ""))))
+                return
+            if self.path == "/goals":
+                steps = body.get("steps", [])
+                if not isinstance(steps, list):
+                    raise ValueError("steps must be an array")
+                goal = autonomy.create_goal(
+                    conn,
+                    str(body.get("title", "")),
+                    str(body.get("objective", "")),
+                    steps,
+                    priority=int(body.get("priority", 0)),
+                )
+                self.send_json(201, goal)
+                return
+            if self.path == "/schedules":
+                payload = body.get("payload", {})
+                if not isinstance(payload, dict):
+                    raise ValueError("payload must be an object")
+                schedule = autonomy.add_schedule(
+                    conn,
+                    str(body.get("name", "")),
+                    str(body.get("kind", "")),
+                    payload,
+                    interval_seconds=float(body.get("interval_seconds", 0)),
+                    priority=int(body.get("priority", 0)),
+                    next_run=body.get("next_run"),
+                )
+                self.send_json(201, schedule)
                 return
             if self.path == "/tasks":
                 kind = str(body.get("kind", ""))
@@ -160,6 +202,11 @@ def main() -> None:
     if not valid_control_token(CONTROL_TOKEN):
         raise SystemExit("MONOLITH_CONTROL_TOKEN must be set to at least 32 characters")
     core.init_db(DB_PATH)
+    init_conn = core.connect(DB_PATH)
+    try:
+        autonomy.init_autonomy(init_conn)
+    finally:
+        init_conn.close()
     thread = threading.Thread(target=worker_loop, name="sovereign-worker", daemon=True)
     thread.start()
     server = HTTPServer((HOST, PORT), ControlHandler)
