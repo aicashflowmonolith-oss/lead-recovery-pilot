@@ -4,7 +4,7 @@ Set-StrictMode -Version Latest
 $InstallDir = Join-Path $env:LOCALAPPDATA 'SovereignCore'
 $StateDir = Join-Path $InstallDir 'state'
 $BaseUrl = 'https://raw.githubusercontent.com/aicashflowmonolith-oss/lead-recovery-pilot/sovereign-core-v0/sovereign_core'
-$Files = @('monolith.py', 'render_runtime.py', 'local_runtime.py')
+$Files = @('monolith.py', 'autonomy.py', 'render_runtime.py', 'local_runtime.py')
 
 New-Item -ItemType Directory -Force -Path $InstallDir, $StateDir | Out-Null
 
