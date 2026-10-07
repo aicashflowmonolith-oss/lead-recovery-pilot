@@ -4,7 +4,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$runtimeRoot = Join-Path $env:USERPROFILE ".life-os\runtime"
+$homeDir = Join-Path $env:USERPROFILE ".life-os"
+$runtimeRoot = Join-Path $homeDir "runtime"
 $watchdogPath = Join-Path $runtimeRoot "independent_rescue_watchdog.ps1"
 $logDir = Join-Path $runtimeRoot "logs"
 $logPath = Join-Path $logDir "independent_rescue_watchdog.log"
@@ -34,6 +35,107 @@ function Test-StopGate {
     return [bool]($candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1)
 }
 
+
+function Get-NativeControlProcesses {
+    try {
+        return @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {
+            $cmd = [string]$_.CommandLine
+            if (-not $cmd) { return $false }
+            return (
+                $cmd -match "(?i)native[_-]?control[_-]?launcher\.ps1" -or
+                $cmd -match "(?i)\bwindows[_-]?control\b"
+            )
+        })
+    } catch {
+        Write-RescueLog "native_control_probe_failed type=$($_.Exception.GetType().Name)"
+        return @()
+    }
+}
+
+function Test-NativeControlHealthy {
+    return (@(Get-NativeControlProcesses).Count -gt 0)
+}
+
+function Get-LifeOSRepoRoot {
+    try {
+        $python = (Get-Command python.exe -ErrorAction Stop).Source
+        $candidate = (& $python -c "import pathlib,life_os; print(pathlib.Path(life_os.__file__).resolve().parent.parent)" 2>$null | Select-Object -First 1)
+        if ($candidate -and (Test-Path -LiteralPath $candidate -PathType Container)) {
+            return [string]$candidate
+        }
+    } catch {}
+
+    $candidates = @(
+        (Join-Path $env:USERPROFILE "life-os"),
+        (Join-Path $env:USERPROFILE "Documents\life-os"),
+        (Join-Path $env:USERPROFILE "Desktop\life-os"),
+        (Join-Path $env:USERPROFILE "source\life-os"),
+        (Join-Path $env:USERPROFILE "repos\life-os")
+    )
+    foreach ($candidate in $candidates) {
+        if (Test-Path -LiteralPath (Join-Path $candidate "pyproject.toml") -PathType Leaf) {
+            return $candidate
+        }
+    }
+    return $null
+}
+
+function Start-NativeControlRecovery {
+    if (Test-StopGate) {
+        Write-RescueLog "native_control_repair_skipped stop_gate_present"
+        return $false
+    }
+    if (Test-NativeControlHealthy) { return $true }
+
+    try {
+        & schtasks.exe /Query /TN "LIFE OS Native Windows Control" 1>$null 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            & schtasks.exe /Run /TN "LIFE OS Native Windows Control" 1>$null 2>$null
+            Write-RescueLog "native_control_task_triggered"
+            Start-Sleep -Seconds 4
+            if (Test-NativeControlHealthy) { return $true }
+        }
+    } catch {
+        Write-RescueLog "native_control_task_trigger_failed type=$($_.Exception.GetType().Name)"
+    }
+
+    $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+    try {
+        $runCommand = Get-ItemPropertyValue -Path $runKey -Name "LIFE OS Native Windows Control" -ErrorAction Stop
+        if ($runCommand) {
+            Start-Process -FilePath "cmd.exe" -ArgumentList @("/d", "/c", [string]$runCommand) -WindowStyle Hidden
+            Write-RescueLog "native_control_hkcu_triggered"
+            Start-Sleep -Seconds 4
+            if (Test-NativeControlHealthy) { return $true }
+        }
+    } catch {
+        Write-RescueLog "native_control_hkcu_trigger_failed type=$($_.Exception.GetType().Name)"
+    }
+
+    $repoRoot = Get-LifeOSRepoRoot
+    try {
+        $python = (Get-Command python.exe -ErrorAction Stop).Source
+        $db = Join-Path $homeDir "life.db"
+        if ($repoRoot -and (Test-Path -LiteralPath $db -PathType Leaf)) {
+            Start-Process -FilePath $python -ArgumentList @(
+                "-m", "life_os",
+                "--db", ('"{0}"' -f $db),
+                "windows-control",
+                "--home", ('"{0}"' -f $homeDir),
+                "--repo-root", ('"{0}"' -f $repoRoot)
+            ) -WorkingDirectory $repoRoot -WindowStyle Hidden
+            Write-RescueLog "native_control_python_started"
+            Start-Sleep -Seconds 5
+            if (Test-NativeControlHealthy) { return $true }
+        }
+    } catch {
+        Write-RescueLog "native_control_python_start_failed type=$($_.Exception.GetType().Name)"
+    }
+
+    Write-RescueLog "native_control_repair_unverified"
+    return $false
+}
+
 function Get-WorkerProcesses {
     try {
         return @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {
@@ -44,7 +146,6 @@ function Get-WorkerProcesses {
                 $cmd -like "*\.life-os\*" -and (
                     $cmd -match "(?i)recovery_launcher\.ps1" -or
                     $cmd -match "(?i)start_worker_now\.ps1" -or
-                    $cmd -match "(?i)windows[_-]?control" -or
                     $cmd -match "(?i)\blife[_-]?os\b.*\bworker\b" -or
                     $cmd -match "(?i)\bworker\b.*\blife[_-]?os\b"
                 )
@@ -173,18 +274,28 @@ function Install-Watchdog {
     }
 
     $taskCommand = 'powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $watchdogPath + '"'
-    & schtasks.exe /Create /F /TN $taskName /SC MINUTE /MO 1 /TR $taskCommand /RL LIMITED 1>$null
-    if ($LASTEXITCODE -ne 0) { throw "minute watchdog task registration failed" }
+    $minuteTaskInstalled = $false
+    try {
+        & schtasks.exe /Create /F /TN $taskName /SC MINUTE /MO 1 /TR $taskCommand /RL LIMITED 1>$null 2>$null
+        $minuteTaskInstalled = ($LASTEXITCODE -eq 0)
+    } catch {}
+    if (-not $minuteTaskInstalled) {
+        Write-RescueLog "minute_task_registration_failed fallback=hkcu_run"
+    }
 
-    & schtasks.exe /Create /F /TN $taskLogonName /SC ONLOGON /TR $taskCommand /RL LIMITED 1>$null
-    if ($LASTEXITCODE -ne 0) {
-        Write-RescueLog "logon_task_registration_failed fallback=hkcu_run"
+    try {
+        & schtasks.exe /Create /F /TN $taskLogonName /SC ONLOGON /TR $taskCommand /RL LIMITED 1>$null 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            Write-RescueLog "logon_task_registration_failed fallback=hkcu_run"
+        }
+    } catch {
+        Write-RescueLog "logon_task_registration_failed fallback=hkcu_run type=$($_.Exception.GetType().Name)"
     }
 
     New-Item -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Force | Out-Null
     Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name $runValueName -Value $taskCommand
 
-    Write-RescueLog "watchdog_installed task_minute=1 hkcu_run=1"
+    Write-RescueLog "watchdog_installed task_minute=$([int]$minuteTaskInstalled) hkcu_run=1"
     Start-Process -FilePath "powershell.exe" -ArgumentList @(
         "-NoProfile",
         "-WindowStyle", "Hidden",
@@ -209,16 +320,25 @@ try {
         if (Test-StopGate) {
             Write-RescueLog "watchdog_paused stop_gate_present"
             $failures = 0
-        } elseif (Test-WorkerHealthy) {
-            $failures = 0
         } else {
-            Write-RescueLog "worker_unhealthy repair_start"
-            if (Start-WorkerRecovery) {
-                Write-RescueLog "repair_verified"
+            $nativeHealthy = Test-NativeControlHealthy
+            if (-not $nativeHealthy) {
+                Write-RescueLog "native_control_unhealthy repair_start"
+                $nativeHealthy = Start-NativeControlRecovery
+            }
+
+            $workerHealthy = Test-WorkerHealthy
+            if (-not $workerHealthy) {
+                Write-RescueLog "worker_unhealthy repair_start"
+                $workerHealthy = Start-WorkerRecovery
+            }
+
+            if ($nativeHealthy -and $workerHealthy) {
+                Write-RescueLog "repair_verified worker=1 native_control=1"
                 $failures = 0
             } else {
                 $failures++
-                Write-RescueLog "repair_unverified failures=$failures"
+                Write-RescueLog "repair_unverified worker=$([int]$workerHealthy) native_control=$([int]$nativeHealthy) failures=$failures"
             }
         }
 
