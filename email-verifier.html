@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Email Verification Pilot — MONOLITH</title>
+<meta name="description" content="Conservative B2B email verification with syntax, DNS/MX, SMTP mailbox probing, catch-all detection, and clear valid/risky/invalid/unknown output.">
+<style>
+:root{color-scheme:dark;--bg:#0b0e13;--panel:#121722;--text:#f5f7fb;--muted:#a8b1c1;--line:#273043;--accent:#8fd3ff;--ok:#9ee6b0}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 20% 0,#162235 0,#0b0e13 42%);color:var(--text);font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}main{max-width:900px;margin:auto;padding:72px 22px 56px}.eyebrow{color:var(--accent);font-weight:700;letter-spacing:.08em;text-transform:uppercase;font-size:.78rem}h1{font-size:clamp(2.25rem,7vw,4.8rem);line-height:1.02;margin:.35rem 0 1rem;letter-spacing:-.045em}.lead{font-size:clamp(1.05rem,2.4vw,1.35rem);color:var(--muted);max-width:760px}.cta{display:inline-block;background:var(--text);color:#0b0e13;text-decoration:none;font-weight:800;padding:14px 20px;border-radius:10px;margin-top:18px}.cta:hover{transform:translateY(-1px)}section{margin-top:58px}.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}.card{background:rgba(18,23,34,.9);border:1px solid var(--line);border-radius:14px;padding:20px}.card b{display:block;margin-bottom:7px}.card p{margin:0;color:var(--muted)}h2{font-size:1.55rem;margin:0 0 14px}.fine{font-size:.92rem;color:var(--muted);border-top:1px solid var(--line);padding-top:22px}.fine strong{color:var(--text)}@media(max-width:700px){main{padding-top:48px}.grid{grid-template-columns:1fr}section{margin-top:42px}}
+</style>
+</head>
+<body><main>
+<div class="eyebrow">Standalone B2B email verification · MONOLITH</div>
+<h1>Know which emails are usable before you burn sender reputation.</h1>
+<p class="lead">Send a sample list. MONOLITH returns a conservative verification result for each address using syntax checks, DNS/MX routing, bounded SMTP mailbox probing, catch-all detection, and risk flags.</p>
+<a class="cta" href="mailto:teagan.holland@outlook.com?subject=Email%20verification%20pilot&body=Hi%20Teagan%2C%20we%20want%20to%20verify%20approximately%20____%20emails%20per%20month.%20Our%20sample%20list%20has%20____%20rows.">Request a pilot by email</a>
+
+<section><h2>Output you can actually use</h2><div class="grid">
+<div class="card"><b>Valid</b><p>Target mailbox is explicitly accepted while a random mailbox is rejected.</p></div>
+<div class="card"><b>Risky</b><p>Catch-all, role account, disposable domain, or another material risk flag.</p></div>
+<div class="card"><b>Invalid</b><p>Malformed address, no mail route, or explicit hard mailbox rejection.</p></div>
+<div class="card"><b>Unknown</b><p>Greylisting, gateway policy, unreachable SMTP, or ambiguous evidence. Unknown is never promoted to valid.</p></div>
+</div></section>
+
+<section><h2>What gets checked</h2><div class="grid">
+<div class="card"><b>Syntax + domain</b><p>Normalizes the address and rejects malformed inputs before network probing.</p></div>
+<div class="card"><b>DNS / MX</b><p>Confirms the domain has a usable mail route.</p></div>
+<div class="card"><b>SMTP mailbox probe</b><p>Checks recipient response without sending a message body.</p></div>
+<div class="card"><b>Catch-all + risk signals</b><p>Uses a random-recipient probe plus role/disposable-domain flags.</p></div>
+</div></section>
+
+<section class="fine"><strong>Evidence-first by design.</strong> SMTP verification is not perfect: some providers intentionally hide mailbox state. MONOLITH reports uncertainty instead of inventing certainty. High-volume deployment is scoped to the customer's volume, hosting constraints, and acceptable-use requirements before production use.<br><br>Teagan Holland · British Columbia, Canada · <a style="color:var(--accent)" href="mailto:teagan.holland@outlook.com">teagan.holland@outlook.com</a></section>
+</main></body></html>
